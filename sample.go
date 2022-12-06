@@ -4,43 +4,45 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
+	"math/rand"
 	"sync"
 	"time"
 )
 
 var roundMutex = &sync.RWMutex{}
 var outputMutex = &sync.RWMutex{}
+var failMutex = &sync.RWMutex{}
 
 var allChans = make(map[int]chan []float64)
-var output = make([][]float64, 5)
+var output = make([][]float64, 0)
 var rounds = make(map[int]int)
+var failures = 0
 
-//func simulateDelay() {
-//
-//}
+func simulateDelay() {
+	n := rand.Float64()
+	time.Sleep(time.Duration(n) * time.Second)
+}
 func sendValue(to, round int, vals []float64) {
-	//simulateDelay()
-	fmt.Printf("Started sending value %v to %d\n", vals, to)
+	simulateDelay()
+	//fmt.Printf("Started sending value %v to %d\n", vals, to)
 	for {
 		roundMutex.RLock()
 		toRound := rounds[to]
 		roundMutex.RUnlock()
 		//send the value to the node
 		if toRound == round {
-			fmt.Printf("Sending value %v to %d\n", vals, to)
+			//fmt.Printf("Sending value %v to %d\n", vals, to)
 			channel := allChans[to]
 			channel <- vals
 			break
 		}
 	}
 }
-func findConsensus(id, round, N, f int, xy []float64, failed bool) {
-	fmt.Printf("consensus started for id: %d, round %d\n", id, round)
+func findConsensus(id, round, N, f, maxRounds int, xy []float64, failed bool) {
+	start := time.Now()
+	//fmt.Printf("consensus started for id: %d, round %d\n", id, round)
 	self := allChans[id]
-	fmt.Println(self)
-
 	self <- xy
-	fmt.Println("here")
 	for j := 0; j < N; j++ {
 		if id == j {
 			continue
@@ -67,12 +69,25 @@ func findConsensus(id, round, N, f int, xy []float64, failed bool) {
 	roundMutex.Lock()
 	rounds[id] += 1
 	roundMutex.Unlock()
-
+	end := time.Since(start)
 	outputMutex.Lock()
-	output = append(output, []float64{float64(id), sumX, sumY, float64(round), float64(0)})
+	if rand.Float64() > 0.8 && failures < f {
+		fmt.Printf("Node %d has failed in round %d.\n", id, round)
+		failMutex.Lock()
+		failures += 1
+		output = append(output, []float64{float64(id), sumX, sumY, float64(round), 1, float64(end) / 1000000})
+		outputMutex.Unlock()
+		failMutex.Unlock()
+		return
+	}
+	fmt.Printf("Round %d for node %d took %s\n", round, id, end)
+	output = append(output, []float64{float64(id), sumX, sumY, float64(round), 0, float64(end) / 1000000})
 	outputMutex.Unlock()
-	fmt.Printf("consensus finished for id: %d, round %d\n", id, round)
-	findConsensus(id, round+1, N, f, []float64{sumX, sumY}, false)
+	//fmt.Printf("consensus finished for id: %d, round %d, time: %s\n", id, round, end)
+	if round < maxRounds {
+		findConsensus(id, round+1, N, f, maxRounds, []float64{sumX, sumY}, false)
+	}
+	//findConsensus(id, round+1, N, f, []float64{sumX, sumY}, false)
 }
 func makeChannel(i, cap int) {
 	receiver := make(chan []float64, cap)
@@ -81,6 +96,7 @@ func makeChannel(i, cap int) {
 
 type Input struct {
 	F      int         `json:"f"`
+	R      int         `json:"R"`
 	Values [][]float64 `json:"values"`
 }
 type ResponseBody struct {
@@ -88,27 +104,25 @@ type ResponseBody struct {
 }
 
 func main() {
-	string := "{\n    \"F\": 4,\n    \"Values\": [[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001]]\n}"
-
+	string := "{\n    \"F\":3,\n    \"Values\": [[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001],[1,98],[2,1001]],\n    \"R\": 25\n}"
+	rand.Seed(0)
 	var input Input
 	err := json.Unmarshal([]byte(string), &input)
 	if err != nil {
+
 		fmt.Printf(err.Error())
 	}
-	//values := make([][]float64, 2)
-	//values[0] = []float64{1, 98}
-	//values[1] = []float64{98, 1}
-
-	for i, _ := range input.Values {
-		makeChannel(i, 2)
-		rounds[i] = 0
+	for i, val := range input.Values {
+		output = append(output, []float64{float64(i), val[0], val[1], 0, float64(0)})
+		makeChannel(i, len(input.Values)-input.F)
+		rounds[i] = 1
 	}
-	fmt.Println(rounds)
+
 	for i, value := range input.Values {
-		go findConsensus(i, 0, 2, 0, value, false)
+		go findConsensus(i, 1, len(input.Values), input.F, input.R, value, false)
 	}
 
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 5000)
 	responseBody := ResponseBody{
 		Output: output,
 	}

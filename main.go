@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"log"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -13,13 +14,16 @@ import (
 
 var roundMutex = &sync.RWMutex{}
 var outputMutex = &sync.RWMutex{}
+var failMutex = &sync.RWMutex{}
 
 var allChans = make(map[int]chan []float64)
 var output = make([][]float64, 0)
 var rounds = make(map[int]int)
+var failures = 0
 
 func simulateDelay() {
-
+	n := rand.Float64()
+	time.Sleep(time.Duration(n/10) * time.Second)
 }
 func sendValue(to, round int, vals []float64) {
 	simulateDelay()
@@ -35,7 +39,8 @@ func sendValue(to, round int, vals []float64) {
 		}
 	}
 }
-func findConsensus(id, round, N, f int, xy []float64, failed bool) {
+func findConsensus(id, round, N, f, maxRounds int, xy []float64, failed bool) {
+	start := time.Now()
 	self := allChans[id]
 	self <- xy
 	for j := 0; j < N; j++ {
@@ -64,12 +69,24 @@ func findConsensus(id, round, N, f int, xy []float64, failed bool) {
 	roundMutex.Lock()
 	rounds[id] += 1
 	roundMutex.Unlock()
-
+	end := time.Since(start)
 	outputMutex.Lock()
-	output = append(output, []float64{float64(id), sumX, sumY, float64(round), float64(0)})
+	if rand.Float64() > 0.8 && failures < f {
+		log.Printf("Node %d has failed in round %d.\n", id, round)
+		failMutex.Lock()
+		failures += 1
+		output = append(output, []float64{float64(id), sumX, sumY, float64(round), 1, float64(end) / 1000000})
+		outputMutex.Unlock()
+		failMutex.Unlock()
+		return
+	}
+	output = append(output, []float64{float64(id), sumX, sumY, float64(round), 0, float64(end) / 1000000})
 	outputMutex.Unlock()
+	if round < maxRounds {
+		findConsensus(id, round+1, N, f, maxRounds, []float64{sumX, sumY}, false)
+	}
+	//findConsensus(id, round+1, N, f, maxRounds, []float64{sumX, sumY}, false)
 
-	findConsensus(id, round+1, N, f, []float64{sumX, sumY}, false)
 }
 func makeChannel(i, cap int) {
 	receiver := make(chan []float64, cap)
@@ -103,14 +120,20 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			StatusCode: http.StatusOK,
 		}, nil
 	}
-	for i, _ := range input.Values {
+	for i, val := range input.Values {
+		output = append(output, []float64{float64(i), val[0], val[1], 0, 0, 0})
 		makeChannel(i, len(input.Values)-input.F)
-	}
-	for i, value := range input.Values {
-		go findConsensus(i, 0, len(input.Values), input.F, value, false)
+		rounds[i] = 1
 	}
 
-	time.Sleep(time.Millisecond * 5000)
+	for i, value := range input.Values {
+		go findConsensus(i, 1, len(input.Values), input.F, input.R, value, false)
+	}
+
+	time.Sleep(time.Millisecond * 12000)
+	//sort.Slice(output, func(i, j int) bool {
+	//	return output[i][3] < output[j][3]
+	//})
 	responseBody := ResponseBody{
 		Output: output,
 	}
@@ -137,8 +160,9 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 }
 
 type Input struct {
-	F      int         `json:"f"`
-	Values [][]float64 `json:"values"`
+	F      int         `json:"F"`
+	R      int         `json:"R"`
+	Values [][]float64 `json:"Values"`
 }
 type ResponseBody struct {
 	Output [][]float64 `json:"output"`
