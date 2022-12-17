@@ -68,6 +68,10 @@ func getFloatSwitchOnly(unk interface{}) (float64, error) {
 //Our implementation forces the number of failures to be capped,
 //this variable keeps track of how many nodes have failed
 var failures = 0
+
+//output is a slice of slices, where each value represents a single node at one specific round,
+//front end will iterate through the output (after it's been transformed into a string to be part of the json)
+//and plot each value as a point on the graph
 var output = make([][]float64, 0)
 
 //mutex to change the number of failed nodes
@@ -191,10 +195,7 @@ func findConsensus(id, N, f, r, maxRounds int, initVal []float64, start time.Tim
 	for i := 2; i <= maxRounds+1; i++ {
 		initVal = append(initVal, float64(i), float64(id))
 		self <- initVal
-		slice := make([]int, 0)
-		for j := 0; j < N; j++ {
-			slice = append(slice, j)
-		}
+
 		//shuffle so that the order in which messages are sent is randomized for every round
 		Shuffle(slice)
 		for j := 0; j < N; j++ {
@@ -223,9 +224,10 @@ func findConsensus(id, N, f, r, maxRounds int, initVal []float64, start time.Tim
 		//if there haven't been f failures yet, then there is a 20% chance that this node fails
 
 		if rand.Float64() > 0.8 && failures < f {
+			//[node ID, x, y, round, 0/1 depending on failed or not, delay since findConsensus() was ran] is the format for the output
+			//find the difference between the current time and when this function was called, convert to ms
 			output = append(output, []float64{float64(id), x, y, float64(i), 1, float64(time.Since(start) / 100000)})
 			failures += 1
-			fList = append(fList, id)
 			outputMutex.Unlock()
 			failMutex.Unlock()
 			//after failing, the for loop breaks so the node stops running future rounds.
@@ -278,6 +280,8 @@ func handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		if rand.Float64() > 0.8 && failures < input.F {
 			failMutex.Lock()
 			outputMutex.Lock()
+			//format for output is [node ID, x, y, round, 0/1 depending on failed or not, delay since findConsensus() was ran],
+			//in this case since it is the first round, the time elapsed is 0 since it is the first round and the node failed
 			output = append(output, []float64{float64(i), val[0], val[1], 1, 1, 0})
 			outputMutex.Unlock()
 
