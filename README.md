@@ -7,3 +7,6 @@ If you wish to make updates to main.go, enter `GOARCH=amd64 GOOS=linux go build 
 into a .zip file. Then, navigate to the AWS Lambda console and upload the .zip, making sure the entry point for your lambda is set to main. The free tier of AWS
 allows for up to 3008 MB of memory, and changes to the runtime of the program to make it longer than 15 seconds should be accompanied by changing the timeout
 limit (which is 15 seconds by default). 
+
+##Sources
+I used the getFloatSwitchOnly() function from this StackExchange post https://stackoverflow.com/questions/20767724/converting-unknown-interface-to-float64-in-golang
